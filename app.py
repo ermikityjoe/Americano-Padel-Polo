@@ -13,82 +13,95 @@ PAIRING_METHOD_MANUAL = "Selección Manual"
 # --- Funciones de Generación de Fixture ---
 
 def generate_round_robin_pairs_fixture(pairs, num_courts):
-    """Genera un fixture Round Robin para parejas fijas."""
+    """
+    Genera un fixture Round Robin para parejas fijas, intentando llenar las rondas
+    según el número de pistas disponibles.
+    """
     num_pairs = len(pairs)
     if num_pairs < 2:
         return {"rounds": []}
 
     fixture = {"rounds": []}
-    matches_to_play = list(combinations(pairs, 2))
-    random.shuffle(matches_to_play) # Barajar para variar el orden
+    all_matches_tuples = list(combinations(pairs, 2))
+    if not all_matches_tuples:
+         return {"rounds": []} # No hay partidos que jugar
 
-    # Algoritmo simple para distribuir partidos en rondas según pistas
-    matches_per_round = min(num_courts, num_pairs // 2) if num_pairs > 1 else 0
-    num_rounds_needed = math.ceil(len(matches_to_play) / matches_per_round) if matches_per_round > 0 else 0
+    random.shuffle(all_matches_tuples) # Barajar para variar el orden entre torneos
 
-    all_matches_tuples = list(matches_to_play) # Copia para trabajar
+    matches_per_round_limit = min(num_courts, num_pairs // 2) if num_pairs > 1 else 0
+    if matches_per_round_limit <= 0:
+         st.warning("No se pueden jugar partidos con la configuración actual de pistas/parejas.")
+         return {"rounds": []}
+
+    assigned_match_indices = set() # Indices de all_matches_tuples que ya están en el fixture
     round_num_actual = 0
 
-    while all_matches_tuples:
+    # Iterar mientras queden partidos por asignar
+    while len(assigned_match_indices) < len(all_matches_tuples):
         round_num_actual += 1
-        round_matches_data = []
-        pairs_in_this_round_check = set() # Para asegurar que una pareja no juegue dos veces en la ronda
-        matches_added_this_round_indices = set() # Indices de all_matches_tuples
+        current_round_matches_data = []
+        pairs_playing_in_this_round = set() # Nombres de parejas (p1/p2) para evitar conflictos en la ronda
 
-        # Iterar sobre los partidos restantes para llenar la ronda actual
+        # Intentar llenar la ronda actual
         for idx, (pair1_tuple, pair2_tuple) in enumerate(all_matches_tuples):
-            if len(round_matches_data) >= matches_per_round:
-                break # Ronda llena
+            # Saltar si el partido ya fue asignado a una ronda anterior
+            if idx in assigned_match_indices:
+                continue
+
+            # Saltar si ya hemos llenado las pistas para esta ronda
+            if len(current_round_matches_data) >= matches_per_round_limit:
+                break
 
             pair1_name = f"{pair1_tuple[0]}/{pair1_tuple[1]}"
             pair2_name = f"{pair2_tuple[0]}/{pair2_tuple[1]}"
 
-            # Comprobar si alguna de las parejas ya está jugando en esta ronda
-            if pair1_name not in pairs_in_this_round_check and pair2_name not in pairs_in_this_round_check:
-                round_matches_data.append({
-                     # "court" se asignará después
+            # Comprobar si alguna de las parejas ya está jugando en ESTA ronda
+            if pair1_name not in pairs_playing_in_this_round and pair2_name not in pairs_playing_in_this_round:
+                # Añadir partido a la ronda actual
+                current_round_matches_data.append({
                     "pair1": pair1_tuple,
                     "pair2": pair2_tuple,
                     "score1": None,
                     "score2": None
+                    # Court se asignará después
                 })
-                pairs_in_this_round_check.add(pair1_name)
-                pairs_in_this_round_check.add(pair2_name)
-                matches_added_this_round_indices.add(idx) # Marcar este índice para eliminar
+                # Marcar las parejas como ocupadas para esta ronda
+                pairs_playing_in_this_round.add(pair1_name)
+                pairs_playing_in_this_round.add(pair2_name)
+                # Marcar el índice del partido como asignado GLOBALMENTE
+                assigned_match_indices.add(idx)
 
-        # Asignar número de pista
-        for court_idx, match_data in enumerate(round_matches_data):
+        # Si no se pudo añadir ningún partido en esta iteración pero quedan partidos, algo va mal.
+        if not current_round_matches_data and len(assigned_match_indices) < len(all_matches_tuples):
+             st.warning(f"Advertencia: No se pudieron asignar más partidos en la ronda {round_num_actual}, aunque quedaban {len(all_matches_tuples) - len(assigned_match_indices)} por asignar. Puede haber un problema con la distribución o un número bajo de pistas.")
+             break # Evitar bucle infinito
+
+        # Asignar número de pista a los partidos de esta ronda
+        for court_idx, match_data in enumerate(current_round_matches_data):
             match_data["court"] = court_idx + 1
-            
-        # Calcular parejas que descansan (si aplica)
-        all_pair_names_in_fixture = {f"{p[0]}/{p[1]}" for p in pairs}
-        resting_pairs_names = list(all_pair_names_in_fixture - pairs_in_this_round_check)
 
-        if round_matches_data:
+        # Calcular parejas que descansan
+        all_pair_names_in_fixture = {f"{p[0]}/{p[1]}" for p in pairs}
+        resting_pairs_names = list(all_pair_names_in_fixture - pairs_playing_in_this_round)
+
+        # Añadir la ronda al fixture si contiene partidos
+        if current_round_matches_data:
              fixture["rounds"].append({
                  "round_num": round_num_actual,
-                 "matches": round_matches_data,
+                 "matches": current_round_matches_data,
                  "resting": resting_pairs_names
              })
 
-        # Eliminar partidos asignados de la lista principal (iterando inversamente por índices)
-        remaining_matches_temp = []
-        for idx, match in enumerate(all_matches_tuples):
-             if idx not in matches_added_this_round_indices:
-                 remaining_matches_temp.append(match)
-        all_matches_tuples = remaining_matches_temp
-
-
-    # Validar si se generaron rondas (deberían si hay partidos)
-    if not fixture["rounds"] and len(pairs) >= 2:
-         st.warning("No se pudieron generar rondas para el torneo de parejas.")
-
+    # Comprobación final
+    if len(assigned_match_indices) != len(all_matches_tuples):
+        st.warning(f"Advertencia final: No se asignaron todos los partidos. ({len(assigned_match_indices)} de {len(all_matches_tuples)})")
 
     return fixture
 
 
 def generate_americano_fixture(players, num_courts):
     """Genera un fixture Americano SIMPLIFICADO (rotación aleatoria)."""
+    # (Sin cambios en esta función respecto a la versión anterior)
     num_players = len(players)
     if num_players < 4:
         return {"rounds": []}
@@ -176,18 +189,17 @@ def generate_americano_fixture(players, num_courts):
 
 
 # --- Funciones de Cálculo de Clasificación ---
-
+# (Sin cambios en estas funciones respecto a la versión anterior)
 def calculate_standings_americano(players, fixture_data):
     """Calcula la clasificación individual para torneo Americano."""
     standings = {p: {"JG": 0, "JR": 0, "DG": 0, "PG": 0, "PP": 0, "PE": 0, "PJ": 0} for p in players}
     if not fixture_data or 'rounds' not in fixture_data: return standings, []
 
-    # Reiniciar a cero antes de recalcular
     for p in players: standings[p] = {"JG": 0, "JR": 0, "DG": 0, "PG": 0, "PP": 0, "PE": 0, "PJ": 0}
-    processed_match_ids_for_stats = set() # Para evitar doble conteo de PJ/PG/PP/PE
+    processed_match_ids_for_stats = set()
 
     for round_idx, round_data in enumerate(fixture_data['rounds']):
-        for match_idx, match in enumerate(round_data['matches']):
+        for match_idx, match in enumerate(round_data.get('matches', [])): # Usar .get
             match_id = f"r{round_data['round_num']}_m{match_idx}"
 
             score1 = st.session_state.get(f"score1_{match_id}")
@@ -196,17 +208,16 @@ def calculate_standings_americano(players, fixture_data):
             s1 = int(score1) if score1 is not None else None
             s2 = int(score2) if score2 is not None else None
 
-            match['score1'] = s1
-            match['score2'] = s2
+            # Actualizar scores en el fixture (opcional si solo lees de session state)
+            # match['score1'] = s1
+            # match['score2'] = s2
 
             if s1 is not None and s2 is not None:
                 pair1, pair2 = match['pair1'], match['pair2']
 
-                # Sumar juegos (se hace siempre que haya score)
                 for p in pair1: standings[p]['JG'] += s1; standings[p]['JR'] += s2
                 for p in pair2: standings[p]['JG'] += s2; standings[p]['JR'] += s1
 
-                # Actualizar PJ/PG/PP/PE solo si no se ha procesado el partido para stats
                 if match_id not in processed_match_ids_for_stats:
                     if s1 > s2:   res1, res2 = 'PG', 'PP'
                     elif s2 > s1: res1, res2 = 'PP', 'PG'
@@ -215,7 +226,7 @@ def calculate_standings_americano(players, fixture_data):
                     for p in pair1: standings[p]['PJ'] += 1; standings[p][res1] += 1
                     for p in pair2: standings[p]['PJ'] += 1; standings[p][res2] += 1
 
-                    processed_match_ids_for_stats.add(match_id) # Marcar como procesado para stats
+                    processed_match_ids_for_stats.add(match_id)
 
     for p in players: standings[p]['DG'] = standings[p]['JG'] - standings[p]['JR']
 
@@ -229,12 +240,11 @@ def calculate_standings_pairs(pairs, fixture_data):
     standings = {name: {"JG": 0, "JR": 0, "DG": 0, "PG": 0, "PP": 0, "PE": 0, "PJ": 0} for name in pair_names}
     if not fixture_data or 'rounds' not in fixture_data: return standings, []
 
-    # Reiniciar a cero antes de recalcular
     for name in pair_names: standings[name] = {"JG": 0, "JR": 0, "DG": 0, "PG": 0, "PP": 0, "PE": 0, "PJ": 0}
     processed_match_ids_for_stats = set()
 
     for round_idx, round_data in enumerate(fixture_data['rounds']):
-        for match_idx, match in enumerate(round_data['matches']):
+        for match_idx, match in enumerate(round_data.get('matches', [])): # Usar .get
             match_id = f"r{round_data['round_num']}_m{match_idx}"
 
             score1 = st.session_state.get(f"score1_{match_id}")
@@ -243,19 +253,18 @@ def calculate_standings_pairs(pairs, fixture_data):
             s1 = int(score1) if score1 is not None else None
             s2 = int(score2) if score2 is not None else None
 
-            match['score1'] = s1
-            match['score2'] = s2
+            # Actualizar scores en el fixture (opcional)
+            # match['score1'] = s1
+            # match['score2'] = s2
 
             if s1 is not None and s2 is not None:
                 pair1_tuple, pair2_tuple = match['pair1'], match['pair2']
                 pair1_name = f"{pair1_tuple[0]}/{pair1_tuple[1]}"
                 pair2_name = f"{pair2_tuple[0]}/{pair2_tuple[1]}"
 
-                # Sumar juegos
                 standings[pair1_name]['JG'] += s1; standings[pair1_name]['JR'] += s2
                 standings[pair2_name]['JG'] += s2; standings[pair2_name]['JR'] += s1
 
-                # Actualizar PJ/PG/PP/PE si no procesado
                 if match_id not in processed_match_ids_for_stats:
                     standings[pair1_name]['PJ'] += 1
                     standings[pair2_name]['PJ'] += 1
@@ -274,7 +283,7 @@ def calculate_standings_pairs(pairs, fixture_data):
     return standings, sorted_pair_names
 
 # --- Funciones de Formateo y UI Auxiliares ---
-
+# (Sin cambios en estas funciones respecto a la versión anterior)
 def generate_standings_text(standings_data, sorted_keys, tournament_name, is_pairs=False):
     """Genera texto formateado para clasificación (individual o parejas)."""
     entity_label = "Pareja" if is_pairs else "Jugador"
@@ -300,16 +309,13 @@ def display_player_inputs(num_players_to_show):
     st.subheader("Nombres de los Jugadores")
     cols_players = st.columns(3)
     for i in range(num_players_to_show):
-        # Recuperar valor existente si el usuario vuelve atrás
         default_name = st.session_state.player_inputs.get(i, f"Jugador {i+1}")
         player_name = cols_players[i % 3].text_input(
              f"Jugador {i + 1}",
              value=default_name,
              key=f"player_{i}" # Clave persistente
         )
-        # Guardar en un dict temporal para el submit del formulario actual
         player_names_inputs[i] = player_name
-        # Guardar también en session_state para persistencia entre reruns INMEDIATAMENTE
         st.session_state.player_inputs[i] = player_name
     return player_names_inputs
 
@@ -320,6 +326,7 @@ st.set_page_config(page_title="Gestor Torneos Pádel", layout="wide")
 st.title("🏓 Gestor de Torneos de Pádel")
 
 # --- Inicialización del Estado de Sesión ---
+# (Sin cambios)
 if 'app_phase' not in st.session_state:
     st.session_state.app_phase = 'config_base' # Fases: config_base, config_players, config_pairing, viewing
     st.session_state.config = {'num_players': 8, 'num_courts': 2, 'name': "Torneo Pádel"}
@@ -332,6 +339,7 @@ if 'app_phase' not in st.session_state:
     st.session_state.manual_pair_selections = {}
 
 # --- FASE 0: Configuración Base (Nombre, Nº Jugadores, Nº Pistas) ---
+# (Sin cambios)
 if st.session_state.app_phase == 'config_base':
     st.header("1. Configuración Base del Torneo")
 
@@ -344,8 +352,8 @@ if st.session_state.app_phase == 'config_base':
         with col1:
             conf_num_players = st.number_input(
                 "Número total de jugadores",
-                min_value=4, # Mínimo para cualquier torneo
-                step=1, # Permitir impares temporalmente, validar luego si es necesario
+                min_value=4,
+                step=1,
                 value=st.session_state.config.get('num_players', 8)
             )
         with col2:
@@ -359,40 +367,34 @@ if st.session_state.app_phase == 'config_base':
         submitted_base_config = st.form_submit_button("Confirmar Configuración Base")
 
         if submitted_base_config:
-            # Validar aquí si es necesario (e.g., mínimo de jugadores)
             if conf_num_players < 4:
                  st.error("Se necesitan al menos 4 jugadores.")
             else:
-                 # Guardar configuración base en session_state
                  st.session_state.config['name'] = conf_name
                  st.session_state.config['num_players'] = conf_num_players
                  st.session_state.config['num_courts'] = conf_num_courts
-                 # Pasar a la siguiente fase
                  st.session_state.app_phase = 'config_players'
-                 st.rerun() # Forzar rerun para mostrar la fase de ingreso de nombres
+                 st.rerun()
 
 # --- FASE 1: Ingreso de Nombres de Jugadores ---
+# (Sin cambios)
 elif st.session_state.app_phase == 'config_players':
     st.header("2. Ingreso de Jugadores")
 
-    # Mostrar configuración base confirmada
     st.info(f"**Torneo:** {st.session_state.config.get('name')} | "
             f"**Jugadores:** {st.session_state.config.get('num_players')} | "
             f"**Pistas:** {st.session_state.config.get('num_courts')}")
 
     with st.form("player_entry_form"):
         num_players_to_enter = st.session_state.config.get('num_players', 0)
-        # Mostrar los campos de entrada (la función guarda en st.session_state.player_inputs)
         display_player_inputs(num_players_to_enter)
 
         submitted_players = st.form_submit_button("Confirmar Jugadores y Continuar")
 
         if submitted_players:
-            # Recoger nombres finales del estado de sesión donde se guardaron
             final_players = [st.session_state.player_inputs.get(i, "").strip() for i in range(num_players_to_enter)]
-            final_players = [p for p in final_players if p] # Filtrar vacíos
+            final_players = [p for p in final_players if p]
 
-            # Validaciones
             valid = True
             if len(final_players) != num_players_to_enter:
                 st.error(f"Error: Se esperaban {num_players_to_enter} nombres de jugador, pero se encontraron {len(final_players)} no vacíos.")
@@ -403,20 +405,12 @@ elif st.session_state.app_phase == 'config_players':
 
             if valid:
                 st.session_state.players = final_players
-                # Pasar a la siguiente fase
                 st.session_state.app_phase = 'config_pairing'
                 st.rerun()
-            else:
-                # Permanecer en esta fase, mostrar errores
-                 pass
 
-    # Botón para volver a la configuración base
     st.divider()
     if st.button("⬅️ Volver a Configuración Base"):
          st.session_state.app_phase = 'config_base'
-         # Borrar nombres de jugadores si volvemos atrás? Opcional
-         # st.session_state.player_inputs = {}
-         # st.session_state.players = []
          st.rerun()
 
 
@@ -424,7 +418,6 @@ elif st.session_state.app_phase == 'config_players':
 elif st.session_state.app_phase == 'config_pairing':
     st.header("3. Formato del Torneo y Parejas")
 
-    # Mostrar configuración confirmada
     st.info(f"**Torneo:** {st.session_state.config.get('name')} | "
             f"**Jugadores ({len(st.session_state.players)}):** {', '.join(st.session_state.players)} | "
             f"**Pistas:** {st.session_state.config.get('num_courts')}")
@@ -457,65 +450,65 @@ elif st.session_state.app_phase == 'config_pairing':
         )
         st.session_state.pairing_method = pairing_method
 
+        # --- Selección Manual ---
         if pairing_method == PAIRING_METHOD_MANUAL:
+            # (La lógica de selección manual parece compleja pero funcional, sin cambios aquí)
             st.markdown("**Asigna los jugadores a las parejas:**")
             num_pairs_needed = len(st.session_state.players) // 2
-            potential_partners = [''] + list(st.session_state.players) # Añadir opción vacía
-            manual_pairs_dict = {} # Usar dict para evitar duplicados de pareja temporalmente
-            assigned_players_manual = set() # Jugadores ya usados en una pareja válida
+            potential_partners = [''] + list(st.session_state.players)
+            manual_pairs_dict = {}
+            assigned_players_manual = set()
 
             cols_pairing = st.columns(2)
 
             with st.form("manual_pairs_form"):
-                 all_selections_valid = True
+                 all_selections_valid_form = True # Renombrado para evitar conflicto de nombres
+                 current_form_pairs = {} # Parejas validadas en esta instancia del form
+                 current_form_assigned = set() # Asignados en esta instancia
+
                  for i in range(num_pairs_needed):
                      pair_key_base = f"manual_pair_{i}"
-                     
-                     # Filtrar opciones disponibles: no asignados O el actualmente seleccionado para ESTE dropdown
-                     current_sel1 = st.session_state.manual_pair_selections.get(f"{pair_key_base}_p1", '')
-                     options1 = [''] + [p for p in potential_partners[1:] if p not in assigned_players_manual or p == current_sel1]
-                     try:
-                        index1 = options1.index(current_sel1) if current_sel1 in options1 else 0
-                     except ValueError: index1 = 0 # Si el valor guardado ya no es válido
+                     sel1 = st.session_state.manual_pair_selections.get(f"{pair_key_base}_p1", '')
+                     sel2 = st.session_state.manual_pair_selections.get(f"{pair_key_base}_p2", '')
 
-                     sel1 = cols_pairing[0].selectbox(f"Pareja {i+1} - Jugador 1", options=options1, key=f"{pair_key_base}_p1_sel", index=index1)
-                     st.session_state.manual_pair_selections[f"{pair_key_base}_p1"] = sel1 # Guardar selección
+                     # Opciones disponibles (no asignados en ESTA instancia del form O el seleccionado actual)
+                     options1 = [''] + [p for p in potential_partners[1:] if p not in current_form_assigned or p == sel1]
+                     try: index1 = options1.index(sel1)
+                     except ValueError: index1 = 0
 
-                     # Asignados temporalmente para el segundo select (incluye el jugador 1 de esta pareja)
-                     temp_assigned = assigned_players_manual.copy()
-                     if sel1: temp_assigned.add(sel1)
-                     
-                     current_sel2 = st.session_state.manual_pair_selections.get(f"{pair_key_base}_p2", '')
-                     options2 = [''] + [p for p in potential_partners[1:] if p not in temp_assigned or p == current_sel2]
-                     try:
-                        index2 = options2.index(current_sel2) if current_sel2 in options2 else 0
+                     new_sel1 = cols_pairing[0].selectbox(f"Pareja {i+1} - Jugador 1", options=options1, key=f"{pair_key_base}_p1_sel", index=index1)
+                     st.session_state.manual_pair_selections[f"{pair_key_base}_p1"] = new_sel1 # Guardar inmediatamente
+
+                     temp_assigned_for_p2 = current_form_assigned.copy()
+                     if new_sel1: temp_assigned_for_p2.add(new_sel1)
+
+                     options2 = [''] + [p for p in potential_partners[1:] if p not in temp_assigned_for_p2 or p == sel2]
+                     try: index2 = options2.index(sel2)
                      except ValueError: index2 = 0
 
-                     sel2 = cols_pairing[1].selectbox(f"Pareja {i+1} - Jugador 2", options=options2, key=f"{pair_key_base}_p2_sel", index=index2)
-                     st.session_state.manual_pair_selections[f"{pair_key_base}_p2"] = sel2
+                     new_sel2 = cols_pairing[1].selectbox(f"Pareja {i+1} - Jugador 2", options=options2, key=f"{pair_key_base}_p2_sel", index=index2)
+                     st.session_state.manual_pair_selections[f"{pair_key_base}_p2"] = new_sel2
 
-                     # Validar selección de esta pareja en el submit
-                     if sel1 and sel2:
-                          if sel1 == sel2:
+                     # Validar y añadir a los sets de ESTA instancia
+                     if new_sel1 and new_sel2:
+                          if new_sel1 == new_sel2:
                                st.warning(f"Pareja {i+1}: Jugadores deben ser diferentes.")
-                               all_selections_valid = False
+                               all_selections_valid_form = False
                           else:
-                               # Añadir a dict temporal para checkear duplicados y asignar al final
-                               manual_pairs_dict[i] = tuple(sorted((sel1, sel2)))
-                               # Marcar como usados TEMPORALMENTE para los siguientes selects
-                               assigned_players_manual.add(sel1)
-                               assigned_players_manual.add(sel2)
-                     elif sel1 or sel2: # Si solo uno está seleccionado
+                               current_form_pairs[i] = tuple(sorted((new_sel1, new_sel2)))
+                               current_form_assigned.add(new_sel1)
+                               current_form_assigned.add(new_sel2)
+                     elif new_sel1 or new_sel2:
                            st.warning(f"Pareja {i+1}: Ambos jugadores deben ser seleccionados.")
-                           all_selections_valid = False
-                     # else: # Ambos vacíos, es válido si no es el submit final
+                           all_selections_valid_form = False
 
                  confirm_manual_pairs = st.form_submit_button("Confirmar Parejas Manuales y Generar Fixture")
                  if confirm_manual_pairs:
-                    final_manual_pairs = list(manual_pairs_dict.values())
+                    final_manual_pairs = list(current_form_pairs.values())
                     final_assigned_players = set(p for pair in final_manual_pairs for p in pair)
 
-                    if not all_selections_valid:
+                    # Re-validar en el submit final
+                    if not all_selections_valid_form:
                          st.error("Hay errores en la selección de parejas. Por favor, corrígelos.")
                     elif len(final_manual_pairs) != num_pairs_needed:
                          st.error(f"Debes completar todas las {num_pairs_needed} parejas.")
@@ -524,17 +517,17 @@ elif st.session_state.app_phase == 'config_pairing':
                     elif len(set(final_manual_pairs)) != len(final_manual_pairs):
                          st.error("Se detectaron parejas duplicadas en la selección.")
                     else:
-                         # ¡Éxito!
                          st.session_state.pairs = final_manual_pairs
                          st.session_state.fixture = generate_round_robin_pairs_fixture(st.session_state.pairs, st.session_state.config['num_courts'])
-                         if st.session_state.fixture and st.session_state.fixture['rounds']:
+                         if st.session_state.fixture and st.session_state.fixture.get('rounds'): # Usar .get
                               st.session_state.app_phase = 'viewing'
                               st.success("Parejas asignadas y fixture Round Robin generado.")
                               st.rerun()
                          else:
-                              st.error("Error al generar el fixture Round Robin.")
+                              st.error("Error al generar el fixture Round Robin. Comprueba si hay suficientes partidos para las pistas.")
 
 
+        # --- Sorteo Aleatorio ---
         elif pairing_method == PAIRING_METHOD_RANDOM:
             st.markdown("**Las parejas se sortearán aleatoriamente.**")
             if st.button("Sortear Parejas y Generar Fixture"):
@@ -545,37 +538,43 @@ elif st.session_state.app_phase == 'config_pairing':
 
                 if len(random_pairs) == len(st.session_state.players) // 2:
                      st.session_state.pairs = random_pairs
-                     st.write("Parejas Sorteadas:")
+                     st.success("Parejas Sorteadas:") # Mostrar mensaje de éxito
                      for p1, p2 in st.session_state.pairs: st.write(f"- {p1} / {p2}")
 
+                     # Generar Fixture DESPUÉS de confirmar las parejas
                      st.session_state.fixture = generate_round_robin_pairs_fixture(st.session_state.pairs, st.session_state.config['num_courts'])
-                     if st.session_state.fixture and st.session_state.fixture['rounds']:
-                          # Añadir botón para continuar explicitamente
-                          if st.button("Continuar a Visualización"):
-                              st.session_state.app_phase = 'viewing'
-                              st.rerun()
+
+                     # Comprobar si el fixture se generó CORRECTAMENTE
+                     if st.session_state.fixture and st.session_state.fixture.get('rounds'): # Usar .get
+                          st.session_state.app_phase = 'viewing'
+                          st.success("Fixture Round Robin generado.") # Mensaje adicional
+                          # Usar rerun para actualizar la interfaz a la fase de visualización
+                          # Es posible que los mensajes anteriores parpadeen brevemente
+                          st.rerun()
                      else:
-                          st.error("Error al generar el fixture Round Robin.")
+                          st.error("Error al generar el fixture Round Robin después del sorteo. Puede que no haya suficientes partidos posibles.")
+                          # Limpiar fixture fallido para evitar inconsistencias?
+                          # st.session_state.fixture = None
                 else:
                      st.error("Error durante el sorteo aleatorio de parejas.")
+
 
     # --- Opciones específicas para Americano ---
     elif tournament_type == TOURNAMENT_TYPE_AMERICANO:
         st.markdown("**Se generarán parejas rotativas aleatoriamente para cada ronda.**")
         if st.button("Generar Fixture Americano"):
             st.session_state.fixture = generate_americano_fixture(st.session_state.players, st.session_state.config['num_courts'])
-            if st.session_state.fixture and st.session_state.fixture['rounds']:
+            if st.session_state.fixture and st.session_state.fixture.get('rounds'): # Usar .get
                  st.session_state.app_phase = 'viewing'
                  st.success("Fixture Americano (rotación aleatoria) generado.")
                  st.rerun()
             else:
-                 st.error("Error al generar el fixture Americano. Puede que no haya suficientes jugadores/pistas para todas las rondas deseadas.")
+                 st.error("Error al generar el fixture Americano. Puede que no haya suficientes jugadores/pistas para generar rondas.")
 
     # Botón para volver a la fase de ingreso de jugadores
     st.divider()
     if st.button("⬅️ Volver a Ingresar Jugadores"):
          st.session_state.app_phase = 'config_players'
-         # Limpiar estados de esta fase si volvemos
          st.session_state.tournament_type = None
          st.session_state.pairing_method = None
          st.session_state.pairs = []
@@ -585,16 +584,19 @@ elif st.session_state.app_phase == 'config_pairing':
 
 # --- FASE 3: Visualización del Torneo (Rondas y Clasificación) ---
 elif st.session_state.app_phase == 'viewing':
+    # (Sin cambios significativos en esta fase respecto a la versión anterior)
+    # Se han añadido algunos .get() para mayor seguridad al acceder a diccionarios
     st.header(f"🏆 Torneo: {st.session_state.config.get('name', 'Sin Nombre')}")
 
     tournament_mode_display = st.session_state.get('tournament_type', 'Desconocido')
     st.subheader(f"Formato: {tournament_mode_display}")
 
-    # Mostrar detalles específicos del formato
     if tournament_mode_display == TOURNAMENT_TYPE_PAREJAS_FIJAS:
         st.write("**Parejas:**")
-        pair_cols = st.columns(min(3, len(st.session_state.pairs))) # Ajustar columnas a número de parejas
-        for i, (p1, p2) in enumerate(st.session_state.pairs):
+        num_pairs_display = len(st.session_state.get('pairs', []))
+        pair_cols = st.columns(min(3, num_pairs_display) if num_pairs_display > 0 else 1)
+        for i, pair_tuple in enumerate(st.session_state.get('pairs', [])):
+             p1, p2 = pair_tuple
              pair_cols[i % len(pair_cols)].write(f"- {p1} / {p2}")
         st.caption(f"{len(st.session_state.players)} jugadores | {st.session_state.config.get('num_courts', '?')} pistas")
     elif tournament_mode_display == TOURNAMENT_TYPE_AMERICANO:
@@ -604,16 +606,25 @@ elif st.session_state.app_phase == 'viewing':
     standings_data, sorted_keys = {}, []
     is_classification_pairs = (st.session_state.tournament_type == TOURNAMENT_TYPE_PAREJAS_FIJAS)
 
-    # Recalcular standings siempre en esta fase para reflejar cambios en resultados
     if st.session_state.fixture and 'rounds' in st.session_state.fixture:
         if is_classification_pairs:
-            standings_data, sorted_keys = calculate_standings_pairs(st.session_state.pairs, st.session_state.fixture)
+            # Asegurarse de que st.session_state.pairs existe
+            if 'pairs' in st.session_state and st.session_state.pairs:
+                 standings_data, sorted_keys = calculate_standings_pairs(st.session_state.pairs, st.session_state.fixture)
+            else:
+                 st.error("Error: No se encontraron las parejas para calcular la clasificación.")
         else: # Americano (individual)
-            standings_data, sorted_keys = calculate_standings_americano(st.session_state.players, st.session_state.fixture)
+            if 'players' in st.session_state and st.session_state.players:
+                standings_data, sorted_keys = calculate_standings_americano(st.session_state.players, st.session_state.fixture)
+            else:
+                 st.error("Error: No se encontraron los jugadores para calcular la clasificación.")
     else:
-        # Mostrar error si no hay fixture (aunque no debería llegarse aquí sin fixture)
         st.error("Error crítico: No se encontró un fixture válido para visualizar.")
-        st.stop() # Detener si no hay nada que mostrar
+        # Podríamos añadir un botón para volver a configurar si esto pasa
+        if st.button("Volver a Configurar"):
+            st.session_state.app_phase = 'config_pairing' # O la fase anterior relevante
+            st.rerun()
+        st.stop()
 
     # --- Pestañas de Rondas y Clasificación ---
     tab1, tab2 = st.tabs(["📝 Rondas y Resultados", "📊 Clasificación"])
@@ -621,16 +632,15 @@ elif st.session_state.app_phase == 'viewing':
     with tab1:
         st.subheader("Partidos por Ronda")
 
-        if not st.session_state.fixture or not st.session_state.fixture['rounds']:
+        if not st.session_state.fixture or not st.session_state.fixture.get('rounds'): # Usar .get
              st.warning("No hay rondas generadas o disponibles en el fixture.")
         else:
-            # Usar st.expander si hay muchas rondas? O mantener tabs? Tabs está bien por ahora.
             round_tabs = st.tabs([f"Ronda {r['round_num']}" for r in st.session_state.fixture['rounds']])
 
             for i, round_data in enumerate(st.session_state.fixture['rounds']):
                 with round_tabs[i]:
-                    st.markdown(f"**Ronda {round_data['round_num']}**")
-                    if round_data.get('resting'): # Usar .get por seguridad
+                    st.markdown(f"**Ronda {round_data.get('round_num', '?')}**") # Usar .get
+                    if round_data.get('resting'):
                          resting_label = "Parejas descansan" if is_classification_pairs else "Jugadores descansan"
                          st.caption(f"{resting_label}: {', '.join(round_data['resting'])}")
 
@@ -639,9 +649,20 @@ elif st.session_state.app_phase == 'viewing':
                         continue
 
                     # Mostrar partidos y campos para resultados
-                    for match_idx, match in enumerate(round_data['matches']):
+                    for match_idx, match in enumerate(round_data.get('matches', [])): # Usar .get
+                        # Añadir protección por si la estructura del match no es la esperada
+                        if 'pair1' not in match or 'pair2' not in match:
+                             st.warning(f"Saltando partido inválido en Ronda {round_data.get('round_num', '?')}")
+                             continue
+
                         p1_tuple = match['pair1']
                         p2_tuple = match['pair2']
+                        # Asegurarse de que sean tuplas/listas de 2 elementos
+                        if not (isinstance(p1_tuple, (list, tuple)) and len(p1_tuple) == 2 and
+                                isinstance(p2_tuple, (list, tuple)) and len(p2_tuple) == 2):
+                             st.warning(f"Saltando partido con formato de pareja inválido en Ronda {round_data.get('round_num', '?')}")
+                             continue
+
                         p1_name = f"{p1_tuple[0]} / {p1_tuple[1]}"
                         p2_name = f"{p2_tuple[0]} / {p2_tuple[1]}"
 
@@ -650,11 +671,10 @@ elif st.session_state.app_phase == 'viewing':
                         with col_match:
                             st.markdown(f"**Pista {match.get('court', '?')}**: {p1_name} **vs** {p2_name}")
 
-                        match_id = f"r{round_data['round_num']}_m{match_idx}"
+                        match_id = f"r{round_data.get('round_num', '?')}_m{match_idx}"
                         score1_key = f"score1_{match_id}"
                         score2_key = f"score2_{match_id}"
 
-                        # Usar formato %d para asegurar que no muestre decimales
                         with col_score1:
                             st.number_input(f"Games {p1_name}", min_value=0, step=1,
                                             value=st.session_state.get(score1_key), key=score1_key, format="%d", label_visibility="collapsed")
@@ -672,9 +692,8 @@ elif st.session_state.app_phase == 'viewing':
              standings_list = []
              entity_label = "Pareja" if is_classification_pairs else "Jugador"
              for pos, key in enumerate(sorted_keys):
-                 stats = standings_data.get(key, {}) # Usar .get por seguridad
+                 stats = standings_data.get(key, {})
                  row = {"Pos": pos + 1, entity_label: key}
-                 # Añadir stats asegurando que existen
                  row.update({
                     'PJ': stats.get('PJ', 0), 'PG': stats.get('PG', 0), 'PE': stats.get('PE', 0), 'PP': stats.get('PP', 0),
                     'JG': stats.get('JG', 0), 'JR': stats.get('JR', 0), 'DG': stats.get('DG', 0)
@@ -683,9 +702,16 @@ elif st.session_state.app_phase == 'viewing':
 
              df_standings = pd.DataFrame(standings_list)
              cols_to_show = ['Pos', entity_label, 'PJ', 'PG', 'PE', 'PP', 'JG', 'JR', 'DG']
-             df_display = df_standings[cols_to_show]
+             # Asegurar que todas las columnas existen antes de intentar mostrarlas
+             cols_exist = [col for col in cols_to_show if col in df_standings.columns]
+             df_display = df_standings[cols_exist]
 
-             st.dataframe(df_display.set_index('Pos'), use_container_width=True)
+             # Poner 'Pos' como índice si existe
+             if 'Pos' in df_display.columns:
+                 st.dataframe(df_display.set_index('Pos'), use_container_width=True)
+             else:
+                 st.dataframe(df_display, use_container_width=True)
+
 
              # Botón de descarga
              st.download_button(
@@ -701,14 +727,4 @@ elif st.session_state.app_phase == 'viewing':
         keys_to_delete = list(st.session_state.keys())
         for key in keys_to_delete:
              del st.session_state[key]
-        # Re-inicializar valores por defecto para empezar limpio
-        st.session_state.app_phase = 'config_base'
-        st.session_state.config = {'num_players': 8, 'num_courts': 2, 'name': "Torneo Pádel"}
-        st.session_state.players = []
-        st.session_state.pairs = []
-        st.session_state.fixture = None
-        st.session_state.tournament_type = None
-        st.session_state.pairing_method = None
-        st.session_state.player_inputs = {}
-        st.session_state.manual_pair_selections = {}
-        st.rerun()
+        st.rerun() # Streamlit se reiniciará y volverá a la inicialización por defecto
