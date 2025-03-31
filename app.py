@@ -25,99 +25,52 @@ def generate_round_robin_pairs_fixture(pairs_list, num_courts):
         return {"rounds": []}
 
     fixture = {"rounds": []}
-
-    # Crear una copia para no modificar la lista original si se añade BYE
     working_pairs_list = list(pairs_list)
-
     is_odd = False
     if num_pairs % 2 != 0:
-        working_pairs_list.append("BYE")
-        num_pairs += 1 # Ahora num_pairs es el número par efectivo
-        is_odd = True
+        working_pairs_list.append("BYE"); num_pairs += 1; is_odd = True
 
-    n = num_pairs
-    num_rounds = n - 1
-    matches_per_round_algo = n // 2 # Partidos que genera el algoritmo RR por ronda
-    matches_per_round_display = min(num_courts, matches_per_round_algo) # Partidos a mostrar/jugar por ronda
+    n = num_pairs; num_rounds = n - 1; matches_per_round_algo = n // 2
+    matches_per_round_display = min(num_courts, matches_per_round_algo)
+    if matches_per_round_display <= 0:
+        st.warning(f"No se pueden jugar partidos con {num_courts} pistas y {len(pairs_list)} parejas."); return {"rounds": []}
 
-    # Usar deque para rotación eficiente
     rotating_items = deque(working_pairs_list)
+    all_original_pair_names = {f"{p[0]}/{p[1]}" for p in pairs_list} # Nombres de las parejas originales
 
     for round_num in range(1, num_rounds + 1):
-        round_matches_data_algo = [] # Partidos generados por el algoritmo
-        pairs_playing_this_round_algo = set() # Nombres de parejas (p1/p2)
-
+        round_matches_data_algo = []; pairs_playing_this_round_algo = set()
         current_round_deque = rotating_items.copy()
-
-        # Emparejar elementos usando el algoritmo del círculo
         for i in range(matches_per_round_algo):
-            item1 = current_round_deque[i]
-            item2 = current_round_deque[n - 1 - i] # Emparejar con el extremo opuesto
-
+            item1 = current_round_deque[i]; item2 = current_round_deque[n - 1 - i]
             if item1 != "BYE" and item2 != "BYE":
-                 # Validar que sean tuplas (importante si hay BYE)
                  if isinstance(item1, tuple) and isinstance(item2, tuple):
-                    round_matches_data_algo.append({
-                        "pair1": item1, # Mantener el orden original
-                        "pair2": item2,
-                        "score1": None,
-                        "score2": None
-                    })
-                    # Registrar nombres para calcular descansos después
-                    pairs_playing_this_round_algo.add(f"{item1[0]}/{item1[1]}")
-                    pairs_playing_this_round_algo.add(f"{item2[0]}/{item2[1]}")
-                 else:
-                      # Esto no debería pasar si la entrada son tuplas
-                      st.error(f"Error interno RR: Se intentó emparejar algo que no eran tuplas de pareja: {item1} vs {item2}")
+                    round_matches_data_algo.append({"pair1": item1, "pair2": item2, "score1": None, "score2": None})
+                    pairs_playing_this_round_algo.add(f"{item1[0]}/{item1[1]}"); pairs_playing_this_round_algo.add(f"{item2[0]}/{item2[1]}")
+                 else: st.error(f"Error RR interno: {item1} vs {item2}")
 
-        # Asignar número de pista y limitar por num_courts real
-        final_round_matches_display = []
-        pairs_playing_names_display = set()
-        # Opcional: Barajar los partidos DENTRO de la ronda antes de asignar pistas
-        # random.shuffle(round_matches_data_algo)
+        final_round_matches_display = []; pairs_playing_names_display = set()
+        # Opcional: random.shuffle(round_matches_data_algo)
         for court_idx, match_data in enumerate(round_matches_data_algo):
              if court_idx < matches_per_round_display:
-                 match_data["court"] = court_idx + 1
-                 final_round_matches_display.append(match_data)
-                 # Registrar nombres de los que SÍ juegan
-                 pairs_playing_names_display.add(f"{match_data['pair1'][0]}/{match_data['pair1'][1]}")
-                 pairs_playing_names_display.add(f"{match_data['pair2'][0]}/{match_data['pair2'][1]}")
-             # else: # Partidos generados pero no jugados por falta de pistas (ignorar por ahora)
-             #    pass
+                 match_data["court"] = court_idx + 1; final_round_matches_display.append(match_data)
+                 pairs_playing_names_display.add(f"{match_data['pair1'][0]}/{match_data['pair1'][1]}"); pairs_playing_names_display.add(f"{match_data['pair2'][0]}/{match_data['pair2'][1]}")
 
-        # Calcular quién descansa (basado en los que SÍ juegan)
-        all_original_pair_names = {f"{p[0]}/{p[1]}" for p in pairs_list} # Usar la lista original sin BYE
         resting_pairs_names = list(all_original_pair_names - pairs_playing_names_display)
-
-        # Añadir la ronda al fixture (si tiene partidos asignados a pistas)
         if final_round_matches_display:
-            fixture["rounds"].append({
-                "round_num": round_num,
-                "matches": final_round_matches_display,
-                "resting": resting_pairs_names
-            })
+            fixture["rounds"].append({"round_num": round_num, "matches": final_round_matches_display, "resting": resting_pairs_names})
 
-        # Rotar el deque para la siguiente ronda (manteniendo el primer elemento fijo)
-        if len(rotating_items) > 1: # Asegurar que hay al menos 2 elementos para rotar
-             last_item = rotating_items.pop()
-             rotating_items.insert(1, last_item)
-
-    # Si se añadió BYE, ya no está en pairs_list (se usó una copia)
+        if len(rotating_items) > 1: last_item = rotating_items.pop(); rotating_items.insert(1, last_item)
 
     if "rounds" not in fixture: fixture["rounds"] = []
-    elif not fixture["rounds"] and len(pairs_list)>=2:
-         st.warning("Fixture RR generado sin rondas asignadas a pistas.")
-
+    elif not fixture["rounds"] and len(pairs_list)>=2: st.warning("Fixture RR generado sin rondas asignadas.")
     return fixture
-
 
 # --- Función generate_americano_fixture (sin cambios) ---
 def generate_americano_fixture(players, num_courts):
     """Genera un fixture Americano SIMPLIFICADO (rotación aleatoria)."""
     num_players = len(players)
-    if num_players < 4:
-        st.warning("Se necesitan al menos 4 jugadores para el formato Americano.")
-        return {"rounds": []}
+    if num_players < 4: st.warning("Min 4 jugadores para Americano."); return {"rounds": []}
     fixture = {"rounds": []}; all_players = list(players); played_pairs_history = set()
     num_rounds = max(1, num_players - 1)
     for _ in range(num_rounds):
@@ -224,11 +177,26 @@ def display_player_inputs(num_players_to_show):
 
 st.set_page_config(page_title="Gestor Torneos Pádel", layout="wide"); st.title("🏓 Gestor de Torneos de Pádel")
 
-# --- Inicialización del Estado de Sesión (sin cambios) ---
+# --- Inicialización del Estado de Sesión (CORREGIDO) ---
 if 'app_phase' not in st.session_state:
-    st.session_state.app_phase = 'config_base'; st.session_state.config = {'num_players': 8, 'num_courts': 2, 'name': "Torneo Pádel"}; st.session_state.players = []; st.session_state.pairs = []; st.session_state.fixture = None
-    st.session_state.tournament_type = None; st.session_state.pairing_method = None; st.session_state.player_inputs = {}; st.session_state.manual_pair_selections = {}
-    score_keys = [k for k in st.session_state.keys() if k.startswith('score1_') or k.startswith('score2_')]; [del st.session_state[k] for k in score_keys]
+    st.session_state.app_phase = 'config_base'
+    st.session_state.config = {'num_players': 8, 'num_courts': 2, 'name': "Torneo Pádel"}
+    st.session_state.players = []
+    st.session_state.pairs = []
+    st.session_state.fixture = None
+    st.session_state.tournament_type = None
+    st.session_state.pairing_method = None
+    st.session_state.player_inputs = {}
+    st.session_state.manual_pair_selections = {}
+    # --- CORRECCIÓN AQUÍ ---
+    # 1. Identificar las claves a borrar
+    score_keys_to_delete = [k for k in st.session_state.keys() if k.startswith('score1_') or k.startswith('score2_')]
+    # 2. Borrar las claves en un bucle separado
+    for k in score_keys_to_delete:
+        if k in st.session_state: # Buena práctica verificar si aún existe
+            del st.session_state[k]
+    # --- FIN CORRECCIÓN ---
+
 
 # --- FASE 0: Configuración Base (sin cambios) ---
 if st.session_state.app_phase == 'config_base':
@@ -337,11 +305,13 @@ elif st.session_state.app_phase == 'viewing':
         st.subheader("Partidos por Ronda")
         if not st.session_state.fixture or not st.session_state.fixture.get('rounds'): st.warning("No hay rondas generadas.")
         else:
-            round_tabs = st.tabs([f"Ronda {r.get('round_num', '?')}" for r in st.session_state.fixture['rounds']])
-            for i, round_data in enumerate(st.session_state.fixture['rounds']):
+            # Asegurar que las rondas estén ordenadas por número de ronda si no lo están ya
+            sorted_rounds = sorted(st.session_state.fixture['rounds'], key=lambda r: r.get('round_num', 0))
+            round_tabs = st.tabs([f"Ronda {r.get('round_num', '?')}" for r in sorted_rounds])
+            for i, round_data in enumerate(sorted_rounds):
                 with round_tabs[i]:
                     st.markdown(f"**Ronda {round_data.get('round_num', '?')}**")
-                    if round_data.get('resting'): resting_label = "Parejas descansan" if is_classification_pairs else "Jugadores descansan"; st.caption(f"{resting_label}: {', '.join(round_data['resting'])}")
+                    if round_data.get('resting'): resting_label = "Descansan" ; st.caption(f"{resting_label}: {', '.join(round_data['resting'])}") # Simplificado
                     if not round_data.get('matches'): st.info("No hay partidos en esta ronda."); continue
                     for match_idx, match in enumerate(round_data.get('matches', [])):
                         if 'pair1' not in match or 'pair2' not in match: continue
@@ -351,16 +321,12 @@ elif st.session_state.app_phase == 'viewing':
                         col_match, col_score1, col_score2 = st.columns([3, 1, 1])
                         with col_match: st.markdown(f"**Pista {match.get('court', '?')}**: {p1_name} **vs** {p2_name}")
                         match_id = f"r{round_data.get('round_num', '?')}_m{match_idx}"; score1_key, score2_key = f"score1_{match_id}", f"score2_{match_id}"
-
                         # --- CORRECCIÓN AQUÍ: Usar .get(key, 0) para valor inicial ---
                         with col_score1:
-                            st.number_input(f"G {p1_name}", 0, key=score1_key, step=1, format="%d",
-                                            label_visibility="collapsed", value=st.session_state.get(score1_key, 0)) # Valor por defecto 0
+                            st.number_input(f"G {p1_name}", 0, key=score1_key, step=1, format="%d", label_visibility="collapsed", value=st.session_state.get(score1_key, 0)) # Valor por defecto 0
                         with col_score2:
-                            st.number_input(f"G {p2_name}", 0, key=score2_key, step=1, format="%d",
-                                            label_visibility="collapsed", value=st.session_state.get(score2_key, 0)) # Valor por defecto 0
+                            st.number_input(f"G {p2_name}", 0, key=score2_key, step=1, format="%d", label_visibility="collapsed", value=st.session_state.get(score2_key, 0)) # Valor por defecto 0
                         # --- FIN CORRECCIÓN ---
-
                         st.divider()
     with tab2:
         st.subheader(f"Tabla de Clasificación ({'Parejas' if is_classification_pairs else 'Individual'})")
